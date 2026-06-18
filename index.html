@@ -1057,27 +1057,77 @@ function buildLog(){
 }
 
 /* CLOCK */
-function doClk(action,suf){
-  var nameId=suf?'emp-nw':'emp-n';
-  var stId=suf?'clk-stw':'clk-st';
-  var name=document.getElementById(nameId).value.trim();
-  var st=document.getElementById(stId);
-  if(!name){st.style.display='block';st.style.color='#c00';st.textContent='Please enter your name.';return}
-  var now=new Date();
-  var hrs='—';
-  if(action==='in'){
-    D.cIn[name]=now.toISOString();lsSave('n2ci',D.cIn);
-    st.style.color='var(--g2)';st.textContent='✓ '+name+' clocked IN at '+now.toLocaleTimeString();
-  } else {
-    if(D.cIn[name]){hrs=((now-new Date(D.cIn[name]))/3600000).toFixed(2);delete D.cIn[name];lsSave('n2ci',D.cIn)}
-    st.style.color='#c00';st.textContent='✓ '+name+' clocked OUT'+(hrs!=='—'?' ('+hrs+' hrs)':'');
+async function doClk(action, suf) {
+  var nameId = suf ? 'emp-nw' : 'emp-n';
+  var stId = suf ? 'clk-st' : 'clk-st'; // Matches your element IDs
+  var name = document.getElementById(nameId).value.trim();
+  var st = document.getElementById(stId);
+  
+  if (!name) {
+    st.style.display = 'block';
+    st.style.color = '#c00';
+    st.textContent = 'Please enter your name.';
+    return;
   }
-  st.style.display='block';
-  var entry={name:name,action:action==='in'?'Clock In':'Clock Out',date:now.toLocaleDateString(),time:now.toLocaleTimeString(),hrs:hrs};
-  D.log.push(entry);save('log');
-  if(!suf)buildLog();
+  
+  var now = new Date();
+  var hrs = '—';
+  
+  if (action === 'in') {
+    // 1. Maintain local memory
+    D.cIn[name] = now.toISOString();
+    lsSave('n2ci', D.cIn);
+    
+    // 2. Cloud Save: Add to an 'active_clock_ins' collection in Firestore
+    try {
+      await window.firestore.setDoc(window.firestore.doc(window.db, "active_clock_ins", name), {
+        name: name,
+        clockInTime: now.toISOString()
+      });
+    } catch (err) {
+      console.error("Cloud clock-in failed, saved locally:", err);
+    }
+    
+    st.style.color = 'var(--g2)';
+    st.textContent = '✓ ' + name + ' clocked IN at ' + now.toLocaleTimeString();
+    
+  } else {
+    // Clocking Out
+    if (D.cIn[name]) {
+      var checkInTime = D.cIn[name];
+      hrs = ((now - new Date(checkInTime)) / 3600000).toFixed(2);
+      
+      // 1. Clean up local copy
+      delete D.cIn[name];
+      lsSave('n2ci', D.cIn);
+      
+      // 2. Cloud Save: Log a permanent time entry record and clean active logs
+      try {
+        // Save the finished record to a permanent collection
+        await window.firestore.addDoc(window.firestore.collection(window.db, "time_logs"), {
+          name: name,
+          clockIn: checkInTime,
+          clockOut: now.toISOString(),
+          hours: parseFloat(hrs) || 0,
+          timestamp: now.toISOString()
+        });
+        
+        // Remove from active clock-ins collection
+        await window.firestore.deleteDoc(window.firestore.doc(window.db, "active_clock_ins", name));
+      } catch (err) {
+        console.error("Cloud clock-out write failed:", err);
+      }
+    }
+    
+    st.style.color = '#c00';
+    st.textContent = '✓ ' + name + ' clocked OUT' + (hrs !== '—' ? ' (' + hrs + ' hrs)' : '');
+    
+    // If you have a function that renders the week hours table, invoke it here to refresh the UI
+    if (typeof renderWeekHours === 'function') {
+        renderWeekHours();
+    }
+  }
 }
-
 /* LIVE CLOCK */
 function tickClocks(){
   var t=new Date().toLocaleTimeString();
@@ -1087,3 +1137,54 @@ setInterval(tickClocks,1000);tickClocks();
 </script>
 </body>
 </html>
+<script type="module">
+  // Import the functions you need from the SDKs you need
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-app.js";
+  import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-analytics.js";
+  
+  // Add the Cloud Firestore SDK imports
+  import { 
+    getFirestore, 
+    doc, 
+    setDoc, 
+    deleteDoc, 
+    collection, 
+    addDoc, 
+    getDocs,
+    query,
+    orderBy
+  } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-firestore.js";
+
+  // Your web app's Firebase configuration
+  const firebaseConfig = {
+    apiKey: "AIzaSyB1lpmeNzuPnpgD4dKKA8kUgPxH7TEFt8k",
+    authDomain: "n2grass-web.firebaseapp.com",
+    projectId: "n2grass-web",
+    storageBucket: "n2grass-web.firebasestorage.app",
+    messagingSenderId: "812731865811",
+    appId: "1:812731865811:web:c37649c8b01bb83481d226",
+    measurementId: "G-BXL1CYLMTX"
+  };
+
+  // Initialize Firebase
+  const app = initializeApp(firebaseConfig);
+  const analytics = getAnalytics(app);
+  
+  // Initialize Firestore
+  const db = getFirestore(app);
+
+  // BRIDGE: Expose Firestore safely to your existing 1,089 lines of code
+  window.db = db;
+  window.firestore = {
+    doc,
+    setDoc,
+    deleteDoc,
+    collection,
+    addDoc,
+    getDocs,
+    query,
+    orderBy
+  };
+  
+  console.log("Firestore successfully attached to global window scope!");
+</script>
